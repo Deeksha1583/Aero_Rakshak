@@ -5,7 +5,9 @@ scikit-learn
 xgboost
 joblib
 pillow
-pytesseract
 speechrecognition
 plotly
 opencv-python-headless
+easyocr
+torch
+torchvision
