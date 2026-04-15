@@ -17,7 +17,7 @@ scaler = joblib.load("scaler.pkl")
 feature_columns = joblib.load("feature_columns.pkl")
 active_sensors = joblib.load("active_sensors.pkl")
 
-# Load EasyOCR
+# Load OCR
 @st.cache_resource
 def load_reader():
     return easyocr.Reader(['en'], gpu=False)
@@ -107,58 +107,123 @@ def extract_text_easyocr(image):
     
 def parse_sensors(text):
     sensors = {}
-    
+
+    # 🔥 CLEAN TEXT
     text = text.lower()
+
     text = text.replace('$', 's')
     text = text.replace('§', 's')
     text = text.replace('@', '0')
 
-    text = re.sub(r'(\d)(sensor)', r'\1 \2', text)
-    text = re.sub(r'(sensor)(\d)', r'\1 \2', text)
+    text = text.replace("sensar", "sensor")
+    text = text.replace("senser", "sensor")
 
-    tokens = text.split()
+    text = text.replace("i5", "is")
+    text = text.replace("l5", "is")
+
+    text = text.replace(",", ".")
+    text = text.replace("=", " ")
+    text = text.replace(" is ", " ")
+
+    text = text.replace("sii", "s11")
+
+    text = re.sub(r'[^a-z0-9.\s]', ' ', text)
+
+    # 🔥 ADD SPACE (important)
+    text = re.sub(r'(s)(\d)', r'\1 \2', text)
+
+    # -------------------------------
+    # ✅ STEP 1: DIRECT SENSOR FORMAT
+    # -------------------------------
+    matches = re.findall(r'sensor\s*s?\s*(\d+)\s+([0-9]+\.?[0-9]*)', text)
+
+    for num, val in matches:
+        key = f"s{num}"
+
+        try:
+            value = float(val)
+
+            if value > 1000 and "." not in val:
+                value = value / 100
+
+            if key in active_sensors:
+                sensors[key] = value
+
+        except:
+            continue
+
+    # -------------------------------
+    # ✅ STEP 2: HANDLE "S2 100"
+    # -------------------------------
+    matches2 = re.findall(r'\bs\s*(\d+)\s+([0-9]+\.?[0-9]*)', text)
+
+    for num, val in matches2:
+        key = f"s{num}"
+
+        if key in sensors:
+            continue
+
+        try:
+            value = float(val)
+
+            if value > 1000 and "." not in val:
+                value = value / 100
+
+            if key in active_sensors:
+                sensors[key] = value
+
+        except:
+            continue
+
+    # -------------------------------
+    # 🔥 STEP 3: FALLBACK (FIXED)
+    # -------------------------------
+    nums = re.findall(r'\d+\.?\d*', text)
 
     i = 0
-    while i < len(tokens):
-        if tokens[i] == "sensor":
-            # Sensor number
-            if i + 1 < len(tokens):
-                num = tokens[i+1]
-                
-                # Case: "58"
-                if num.startswith('5') and len(num) >= 2:
-                    num = num[1:]
+    while i < len(nums) - 1:
 
-                # Case: "5 8"
-                elif num == '5' and i + 2 < len(tokens):
-                    num = tokens[i+2]
-                    i += 1
+        sensor_raw = nums[i]
 
-                key = f"s{num}"
+        # detect sensor like 52 → S2
+        if sensor_raw.startswith("5") and len(sensor_raw) >= 2:
 
-                # Value
-                if i + 2 < len(tokens):
-                    val = tokens[i+2]
+            sensor_num = sensor_raw[1:]
+            key = f"s{sensor_num}"
 
-                    # Handle "=" case
-                    if val == "=" and i + 3 < len(tokens):
-                        val = tokens[i+3]
-
-                    # Handle split decimal
-                    if i + 3 < len(tokens):
-                        next_val = tokens[i+3]
-                        if val.isdigit() and next_val.isdigit():
-                            val = val + "." + next_val
-
-                    try:
-                        value = float(val)
-                        if key in active_sensors:
-                            sensors[key] = value
-                    except:
-                        pass
-                i += 3
-            else:
+            if key in sensors or key not in active_sensors:
                 i += 1
+                continue
+
+            if i + 1 < len(nums):
+                value_raw = nums[i+1]
+
+                # ❌ FIX: don't merge blindly
+                try:
+                    value = float(value_raw)
+
+                    # ONLY merge if small numbers (decimal case)
+                    if (
+                        i + 2 < len(nums)
+                        and value_raw.isdigit()
+                        and len(value_raw) <= 2
+                        and nums[i+2].isdigit()
+                        and len(nums[i+2]) <= 2
+                    ):
+                        value = float(value_raw + "." + nums[i+2])
+                        i += 1
+
+                    # fix large OCR
+                    if value > 1000 and "." not in value_raw:
+                        value = value / 100
+
+                    if key in active_sensors:
+                        sensors[key] = value
+
+                except:
+                    pass
+
+            i += 2
         else:
             i += 1
 
